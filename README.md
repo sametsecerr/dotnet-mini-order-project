@@ -174,7 +174,9 @@ src/OrderApp.Api/
   EF Core sorgusuna kadar taşınıyor.
 
 React tarafı bu boyutta klasörlere bölünmeyi hak etmiyor; `src/` altında düz duruyor:
-`api.ts` (istemci + tipler), `useProducts.ts`, `format.ts`, `ErrorMessage.tsx` ve `pages/`.
+`api.ts` (istemci + tipler), `useProducts.ts`, `format.ts`, `ErrorMessage.tsx`,
+`TableSkeleton.tsx` ve `pages/`. Stiller tek bir `index.css` içinde; tipografi Montserrat,
+palet nötr gri tonları — renk sadece hata/başarı gibi anlam taşıyan yerlerde kullanılıyor.
 
 ## Sipariş ve stok işlemlerinde veri bütünlüğünü nasıl sağladım?
 
@@ -268,8 +270,10 @@ veritabanını kuruyor.
 - **Frontend'de global state yönetimi ve test yok.** Ekranlar birbirinden bağımsız veri çektiği için
   Redux/React Query gerekmedi; `useProducts` hook'u paylaşılan tek mantık.
 - **Kimlik doğrulama, ürün ekleme/silme yok** — case'de gerekli değil denmişti.
-- **Görsel tasarım minimum** tutuldu (ana kriter olmadığı belirtilmişti); loading / hata / boş
-  durum geri bildirimlerine öncelik verildi.
+- **Görsel tasarım** ana kriter olmadığı için sade tutuldu; yine de loading (skeleton),
+  hata, boş durum ve başarı geri bildirimleri ile klavye erişilebilirliği (focus ring,
+  "içeriğe atla" bağlantısı) tamamlandı. Fontlar Google Fonts üzerinden yükleniyor;
+  internet yoksa sistem fontuna düşer.
 - **Docker eklenmedi**; SQLite sayesinde zaten ek altyapı gerekmiyor.
 
 ## Hangi AI araçlarını kullandım?

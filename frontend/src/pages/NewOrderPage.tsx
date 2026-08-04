@@ -2,6 +2,7 @@ import { useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { api, toError, type OrderDetail, type Product } from '../api';
 import { ErrorMessage } from '../ErrorMessage';
+import { TableSkeleton } from '../TableSkeleton';
 import { formatCurrency } from '../format';
 import { useProducts } from '../useProducts';
 
@@ -107,11 +108,11 @@ export function NewOrderPage() {
   return (
     <section>
       <header className="page-header">
-        <h1>Yeni Siparis</h1>
+        <h1>Yeni siparis</h1>
         <input
           type="search"
           className="search-input"
-          placeholder="Urun ismi veya stok kodu ile ara..."
+          placeholder="Urun ismi veya stok kodu ara"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           aria-label="Urun ara"
@@ -121,7 +122,8 @@ export function NewOrderPage() {
       {createdOrder && (
         <div className="state state--success" role="status">
           <strong>
-            #{createdOrder.id} numarali siparis olusturuldu. Toplam: {formatCurrency(createdOrder.totalAmount)}
+            #{createdOrder.id} numarali siparis olusturuldu. Toplam:{' '}
+            {formatCurrency(createdOrder.totalAmount)}
           </strong>
           <p>
             <Link to={`/orders/${createdOrder.id}`}>Siparis detayini goruntule</Link>
@@ -140,7 +142,7 @@ export function NewOrderPage() {
       <form onSubmit={handleSubmit} noValidate>
         <div className="form-row">
           <label>
-            Musteri adi
+            Musteri
             <input
               type="text"
               value={customerName}
@@ -151,7 +153,7 @@ export function NewOrderPage() {
           </label>
 
           <label>
-            Fiyatlandirma tipi
+            Fiyatlandirma
             <select value={pricingType} onChange={(event) => setPricingType(event.target.value)}>
               <option value="Standard">Standard</option>
               <option value="Bulk">Bulk</option>
@@ -160,12 +162,8 @@ export function NewOrderPage() {
         </div>
 
         {productsError && <ErrorMessage error={productsError} />}
-        {isLoading && <p className="state state--loading">Yukleniyor...</p>}
-        {!isLoading && !productsError && products.length === 0 && (
-          <p className="state">Aramanizla eslesen urun bulunamadi.</p>
-        )}
 
-        {!isLoading && !productsError && products.length > 0 && (
+        {!productsError && (isLoading || products.length > 0) && (
           <table>
             <thead>
               <tr>
@@ -176,6 +174,9 @@ export function NewOrderPage() {
                 <th className="numeric">Miktar</th>
               </tr>
             </thead>
+            {isLoading ? (
+            <TableSkeleton columns={5} />
+            ) : (
             <tbody>
               {products.map((product) => {
                 const isSelected = product.id in selected;
@@ -187,17 +188,20 @@ export function NewOrderPage() {
                       <input
                         type="checkbox"
                         checked={isSelected}
-                        disabled={isOutOfStock}
+                        // Secili urunun stogu biterse secim kaldirilabilmeli.
+                        disabled={isOutOfStock && !isSelected}
                         onChange={(event) => toggleProduct(product, event.target.checked)}
                         aria-label={`${product.name} sec`}
                       />
                     </td>
                     <td>
-                      {product.name} <code>{product.stockCode}</code>
+                      <span className="product-name">
+                        {product.name} <code>{product.stockCode}</code>
+                      </span>
                     </td>
                     <td className="numeric">{formatCurrency(product.price)}</td>
                     <td className="numeric">
-                      {isOutOfStock ? <span className="badge badge--danger">Stokta yok</span> : product.stockQuantity}
+                      {isOutOfStock ? <span className="badge">Stokta yok</span> : product.stockQuantity}
                     </td>
                     <td className="numeric">
                       <input
@@ -215,12 +219,20 @@ export function NewOrderPage() {
                 );
               })}
             </tbody>
+            )}
           </table>
+        )}
+
+        {!isLoading && !productsError && products.length === 0 && (
+          <p className="state state--empty">
+            &ldquo;{search}&rdquo; ile eslesen urun yok. Secili urunler sepette kalir.
+          </p>
         )}
 
         <footer className="form-footer">
           <span>
-            {selectedItems.length} urun secildi &middot; Tahmini toplam: <strong>{formatCurrency(estimatedTotal)}</strong>
+            {selectedItems.length} urun secildi &middot; tahmini toplam{' '}
+            <strong>{formatCurrency(estimatedTotal)}</strong>
           </span>
           <button type="submit" disabled={isSubmitting}>
             {isSubmitting ? 'Gonderiliyor...' : 'Siparisi olustur'}
