@@ -156,8 +156,8 @@ src/OrderApp.Api/
 ├── Common/          ExceptionHandlingMiddleware, BusinessRuleException, NotFoundException
 ├── Data/            AppDbContext, DatabaseSeeder, Migrations/
 └── Features/
-    ├── Products/    Product, ProductService, ProductCache, ProductsController, ProductDtos
-    └── Orders/      Order, OrderItem, PricingType, OrderService, OrdersController, OrderDtos
+    ├── Products/    Product, ProductService, ProductCache, ProductsController, ProductResponse
+    └── Orders/      Order, OrderItem, OrderService, OrdersController, OrderDtos
 ```
 
 - Bir işi değiştirirken tek klasörde çalışıyorum; `Models/`, `Services/`, `Repositories/` diye
@@ -173,8 +173,8 @@ src/OrderApp.Api/
 - Tüm I/O metotları `async` ve `CancellationToken` alıyor; token controller'dan servise, oradan
   EF Core sorgusuna kadar taşınıyor.
 
-React tarafı da benzer şekilde: `api/` (istemci + tipler), `hooks/` (`useProducts`),
-`pages/` (ekranlar), `components/` (Loading / Error / Empty), `lib/` (para ve tarih formatlama).
+React tarafı bu boyutta klasörlere bölünmeyi hak etmiyor; `src/` altında düz duruyor:
+`api.ts` (istemci + tipler), `useProducts.ts`, `format.ts`, `ErrorMessage.tsx` ve `pages/`.
 
 ## Sipariş ve stok işlemlerinde veri bütünlüğünü nasıl sağladım?
 
@@ -194,7 +194,7 @@ React tarafı da benzer şekilde: `api/` (istemci + tipler), `hooks/` (`useProdu
    Böylece "iki kullanıcı aynı anda son ürünü sipariş etti" senaryosunda stok eksiye düşmez.
 5. **Domain kuralı entity içinde** – stok düşürme `Product.TryReduceStock(quantity)` metodunda;
    "yeterli mi?" kontrolü ile "düş" işlemi ayrı yerlere dağılmıyor.
-6. **Aynı ürün birden fazla satırda gelirse** miktarlar tek satırda toplanır (`NormalizeItems`);
+6. **Aynı ürün birden fazla satırda gelirse** miktarlar tek satırda toplanır (`ValidateAndMergeItems`);
    aksi halde stok kontrolü satır satır geçip toplamda stoğu aşabilirdi.
 
 Ayrıca DB seviyesinde `StockQuantity >= 0` ve `Quantity > 0` check constraint'leri son savunma hattı.
@@ -208,7 +208,9 @@ her istekte değişebilirler ve tutarsız veri göstermenin maliyeti okuma kazan
 
 - **Cache key yapısı**
   - `products:all` – filtresiz liste
-  - `products:search:{terim}` – aramaya göre liste (terim küçük harfe normalize edilir)
+  - `products:search:{terim}` – aramaya göre liste. Terim tek bir yerde (`ProductService`)
+    trim + küçük harfe normalize edilir ve **aynı normalize edilmiş terim** hem cache key'inde hem
+    de SQL sorgusunda kullanılır; aksi halde aynı key altında farklı sonuç kümeleri cache'lenebilirdi.
   - `products:id:{id}` – ürün detayı
 - **Cache süresi:** 1 dakika absolute expiration. Stok değiştiğinde zaten anında temizlendiği için
   TTL'in görevi sadece "bir şekilde kaçırılan" invalidation'lara karşı güvenlik ağı olmak.
@@ -239,25 +241,30 @@ veritabanını kuruyor.
 
 | Test | Doğruladığı davranış |
 |---|---|
-| `CreateOrder_StoklariDusurur_VeToplamiDogruHesaplar` | Stoklar doğru azalır, toplam tutar doğru hesaplanır |
-| `CreateOrder_YetersizStokta_SiparisOlusturmaz_VeHicbirStogu_Dusurmez` | Bir üründe stok yetmezse sipariş oluşmaz ve **diğer ürünlerin stoğu da değişmez** |
-| `CreateOrder_UrunFiyatiSonradanDegisse_Bile_SiparisTutariDegismez` | Fiyat snapshot'ı |
-| `CreateOrder_OlmayanUrunIcin_BusinessRuleException_Firlatir` | Ürün varlık kontrolü |
-| `CreateOrder_MiktarSifirVeyaNegatifse_Reddedilir` | Miktar > 0 kuralı |
-| `CreateOrder_AyniUrunBirdenFazlaSatirdaGelirse_MiktarlarBirlestirilir` | Satır birleştirme |
-| `Arama_IsimVeyaStokKoduna_Gore_Filtreler` | İsim/stok kodu araması |
-| `SiparisSonrasi_CacheTemizlenir_VeGuncelStokDoner` | Sipariş sonrası cache invalidation |
+| `CreateOrder_ReducesStockAndCalculatesTotal` | Stoklar doğru azalır, toplam tutar doğru hesaplanır |
+| `CreateOrder_WhenStockIsInsufficient_LeavesOrdersAndStockUntouched` | Bir üründe stok yetmezse sipariş oluşmaz ve **diğer ürünlerin stoğu da değişmez** |
+| `CreateOrder_KeepsOrderTotal_WhenProductPriceChangesLater` | Fiyat snapshot'ı |
+| `CreateOrder_WhenProductDoesNotExist_Throws` | Ürün varlık kontrolü |
+| `CreateOrder_WhenQuantityIsNotPositive_Throws` | Miktar > 0 kuralı |
+| `CreateOrder_MergesDuplicateLinesForSameProduct` | Satır birleştirme |
+| `GetProducts_SearchesByNameOrStockCode` | İsim/stok kodu araması |
+| `GetProducts_ReturnsFreshStock_AfterOrderInvalidatesCache` | Sipariş sonrası cache invalidation |
 
 ## Süre nedeniyle tamamlamadığım / sadeleştirdiğim noktalar
 
 - **Sayfalama yok.** Ürün ve sipariş listeleri tek seferde dönüyor. Gerçek veri hacminde
   `skip/take` + toplam sayı gerekirdi.
+- **Arama yalnızca ASCII için case-insensitive.** Terim ve kolonlar `lower()` ile karşılaştırılıyor;
+  SQLite'ın `lower()` fonksiyonu Türkçe karakterleri (Ç/ç, İ/ı) katlamıyor. Doğru çözüm collation
+  (PostgreSQL'de `citext`/`ILIKE`) olurdu; SQLite'ta kalmayı tercih ettiğim için bu sınırı kabul ettim.
+- **`DbUpdateException` özel olarak maplenmedi.** Sadece `DbUpdateConcurrencyException` → 409.
+  Check constraint ihlali gibi durumlar zaten bir kod hatasına işaret ettiği için 500 kalması
+  bilinçli; hepsini 409'a çevirmek gerçek hataları maskelerdi.
 - **Concurrency çakışmasında otomatik retry yok.** `409` dönüp kullanıcıdan tekrar denemesini
   istiyorum; küçük bir retry döngüsü eklenebilirdi ama davranışı görünür tutmayı tercih ettim.
 - **Sipariş iptali / stok iadesi yok** — case kapsamında değil.
 - **Integration test (WebApplicationFactory) yazmadım.** İş kuralları servis seviyesinde test edildi;
-  HTTP katmanı Swagger üzerinden ve tarayıcıdan manuel doğrulandı. `Program.cs` içindeki
-  `public partial class Program` bunu ileride eklemek için hazır bırakıldı.
+  HTTP katmanı Swagger üzerinden ve tarayıcıdan manuel doğrulandı.
 - **Frontend'de global state yönetimi ve test yok.** Ekranlar birbirinden bağımsız veri çektiği için
   Redux/React Query gerekmedi; `useProducts` hook'u paylaşılan tek mantık.
 - **Kimlik doğrulama, ürün ekleme/silme yok** — case'de gerekli değil denmişti.

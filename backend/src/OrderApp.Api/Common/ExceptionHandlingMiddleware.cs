@@ -3,10 +3,6 @@ using Microsoft.EntityFrameworkCore;
 
 namespace OrderApp.Api.Common;
 
-/// <summary>
-/// Tüm hataları tek noktada ProblemDetails formatına çevirir. Böylece controller'lar
-/// try/catch ile dolmaz ve API her durumda tutarlı bir hata gövdesi döner.
-/// </summary>
 public class ExceptionHandlingMiddleware
 {
     private readonly RequestDelegate _next;
@@ -27,6 +23,7 @@ public class ExceptionHandlingMiddleware
         catch (BusinessRuleException ex)
         {
             _logger.LogInformation(ex, "Is kurali ihlali: {Message}", ex.Message);
+
             var problem = CreateProblem(context, StatusCodes.Status400BadRequest, "Islem gerceklestirilemedi", ex.Message);
             if (ex.Reasons.Count > 0)
             {
@@ -37,30 +34,32 @@ public class ExceptionHandlingMiddleware
         }
         catch (NotFoundException ex)
         {
-            var problem = CreateProblem(context, StatusCodes.Status404NotFound, "Kayit bulunamadi", ex.Message);
-            await WriteAsync(context, problem);
+            await WriteAsync(context, CreateProblem(context, StatusCodes.Status404NotFound, "Kayit bulunamadi", ex.Message));
         }
         catch (DbUpdateConcurrencyException ex)
         {
-            // Aynı ürün için eşzamanlı iki sipariş: concurrency token uyuşmadı,
-            // hiçbir değişiklik kaydedilmedi.
             _logger.LogWarning(ex, "Eszamanli stok guncellemesi cakisti.");
-            var problem = CreateProblem(
+
+            await WriteAsync(context, CreateProblem(
                 context,
                 StatusCodes.Status409Conflict,
                 "Stok bilgisi degisti",
-                "Urun stogu siz islem yaparken degisti. Lutfen tekrar deneyin.");
-            await WriteAsync(context, problem);
+                "Urun stogu siz islem yaparken degisti. Lutfen tekrar deneyin."));
+        }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            // Arama kutusu her tusta onceki istegi iptal ediyor; bu bir hata degil.
+            _logger.LogDebug("Istek istemci tarafindan iptal edildi.");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Beklenmeyen hata.");
-            var problem = CreateProblem(
+
+            await WriteAsync(context, CreateProblem(
                 context,
                 StatusCodes.Status500InternalServerError,
                 "Beklenmeyen bir hata olustu",
-                "Istek islenirken beklenmeyen bir hata olustu.");
-            await WriteAsync(context, problem);
+                "Istek islenirken beklenmeyen bir hata olustu."));
         }
     }
 
@@ -81,7 +80,7 @@ public class ExceptionHandlingMiddleware
         }
 
         context.Response.Clear();
-        context.Response.StatusCode = problem.Status ?? StatusCodes.Status500InternalServerError;
+        context.Response.StatusCode = problem.Status!.Value;
         context.Response.ContentType = "application/problem+json";
         await context.Response.WriteAsJsonAsync(problem);
     }

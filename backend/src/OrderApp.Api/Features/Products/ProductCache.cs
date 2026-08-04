@@ -3,19 +3,6 @@ using Microsoft.Extensions.Primitives;
 
 namespace OrderApp.Api.Features.Products;
 
-/// <summary>
-/// Ürün okumalarının IMemoryCache üzerinden yönetildiği tek nokta.
-///
-/// Cache key yapısı:
-///   products:all                -> tüm ürün listesi
-///   products:search:{terim}     -> aramaya göre filtrelenmiş liste
-///   products:id:{id}            -> tek ürün detayı
-///
-/// Invalidation: tüm ürün girdileri ortak bir <see cref="CancellationChangeToken"/>
-/// ile işaretlenir. Stok/fiyat değiştiğinde token iptal edilir ve ürünle ilgili
-/// bütün key'ler tek hamlede düşer. Böylece "hangi search key'i etkilendi?"
-/// sorusunu çözmek zorunda kalmayız.
-/// </summary>
 public sealed class ProductCache
 {
     public const string AllProductsKey = "products:all";
@@ -33,7 +20,7 @@ public sealed class ProductCache
         _logger = logger;
     }
 
-    public static string SearchKey(string term) => $"products:search:{term.ToLowerInvariant()}";
+    public static string SearchKey(string normalizedTerm) => $"products:search:{normalizedTerm}";
 
     public static string DetailKey(int productId) => $"products:id:{productId}";
 
@@ -44,23 +31,23 @@ public sealed class ProductCache
             return cached;
         }
 
-        var value = await factory();
+        // Token, factory beklenmeden once alinmali: veri okunurken gelen bir
+        // InvalidateAll'i kacirmayalim, yoksa eski veri TTL boyunca cache'te kalir.
+        var resetToken = CurrentResetToken();
 
-        // Bulunamayan kaydı cache'lemiyoruz; aksi halde 404 sonuçları da TTL boyunca sabitlenirdi.
+        var value = await factory();
         if (value is null)
         {
             return value;
         }
 
-        // Girdiyi oluştururken güncel reset token'ını bağla.
-        var entryOptions = new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = Ttl };
-        entryOptions.AddExpirationToken(new CancellationChangeToken(CurrentResetToken()));
-        _cache.Set(key, value, entryOptions);
+        var options = new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = Ttl };
+        options.AddExpirationToken(new CancellationChangeToken(resetToken));
+        _cache.Set(key, value, options);
 
         return value;
     }
 
-    /// <summary>Ürün verisi değiştiğinde (ör. sipariş sonrası stok düşümü) çağrılır.</summary>
     public void InvalidateAll()
     {
         CancellationTokenSource previous;

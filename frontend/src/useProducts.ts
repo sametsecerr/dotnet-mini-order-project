@@ -1,12 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, toError } from '../api/client';
-import type { Product } from '../api/types';
+import { api, toError, type Product } from './api';
 
-/**
- * Ürünleri (opsiyonel arama terimiyle) getirir.
- * Arama kutusu her tuşta istek atmasın diye 300 ms debounce uygulanır ve
- * eski istekler AbortController ile iptal edilir.
- */
 export function useProducts(search: string) {
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -17,6 +11,7 @@ export function useProducts(search: string) {
 
   useEffect(() => {
     const controller = new AbortController();
+
     const timer = setTimeout(async () => {
       setIsLoading(true);
       setError(null);

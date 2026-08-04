@@ -5,9 +5,6 @@ using OrderApp.Api.Features.Products;
 
 namespace OrderApp.Api.Features.Orders;
 
-/// <summary>
-/// Sipariş iş kuralları. Controller sadece isteği buraya iletir.
-/// </summary>
 public class OrderService
 {
     private readonly AppDbContext _db;
@@ -21,14 +18,9 @@ public class OrderService
         _logger = logger;
     }
 
-    /// <summary>
-    /// Siparişi doğrular, stokları düşer ve siparişi kaydeder.
-    /// Sipariş kaydı ile stok düşümü tek transaction içinde yapılır: herhangi bir
-    /// üründe stok yetmiyorsa hiçbir stok değişmez ve sipariş oluşmaz.
-    /// </summary>
     public async Task<OrderDetailResponse> CreateOrderAsync(CreateOrderRequest request, CancellationToken cancellationToken)
     {
-        var items = NormalizeItems(request.Items);
+        var items = ValidateAndMergeItems(request.Items);
         var pricingType = ParsePricingType(request.PricingType);
 
         await using var transaction = await _db.Database.BeginTransactionAsync(cancellationToken);
@@ -38,7 +30,13 @@ public class OrderService
             .Where(p => productIds.Contains(p.Id))
             .ToDictionaryAsync(p => p.Id, cancellationToken);
 
-        EnsureAllProductsExist(productIds, products);
+        var missingIds = productIds.Where(id => !products.ContainsKey(id)).ToList();
+        if (missingIds.Count > 0)
+        {
+            throw new BusinessRuleException(
+                "Siparisteki bazi urunler bulunamadi.",
+                missingIds.Select(id => $"{id} numarali urun bulunamadi.").ToList());
+        }
 
         var order = new Order
         {
@@ -65,8 +63,6 @@ public class OrderService
                 ProductId = product.Id,
                 ProductStockCode = product.StockCode,
                 ProductName = product.Name,
-                // Fiyat sipariş anında kopyalanır; ürün fiyatı sonradan değişse
-                // bile bu siparişin tutarı değişmez.
                 UnitPrice = product.Price,
                 Quantity = item.Quantity,
                 LineTotal = product.Price * item.Quantity
@@ -75,8 +71,6 @@ public class OrderService
 
         if (stockProblems.Count > 0)
         {
-            // Transaction commit edilmez; takip edilen stok değişiklikleri de
-            // SaveChanges çağrılmadığı için veritabanına yansımaz.
             throw new BusinessRuleException("Yetersiz stok nedeniyle siparis olusturulamadi.", stockProblems);
         }
 
@@ -86,7 +80,6 @@ public class OrderService
         await _db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
-        // Stoklar değişti -> ürün cache'i geçersiz.
         _productCache.InvalidateAll();
         _logger.LogInformation("Siparis {OrderId} olusturuldu. Tutar: {Total}", order.Id, order.TotalAmount);
 
@@ -116,19 +109,12 @@ public class OrderService
             .Include(o => o.Items)
             .FirstOrDefaultAsync(o => o.Id == id, cancellationToken);
 
-        if (order is null)
-        {
-            throw new NotFoundException($"{id} numarali siparis bulunamadi.");
-        }
-
-        return ToDetailResponse(order);
+        return order is null
+            ? throw new NotFoundException($"{id} numarali siparis bulunamadi.")
+            : ToDetailResponse(order);
     }
 
-    /// <summary>
-    /// İstek satırlarını doğrular ve aynı ürünün birden fazla satırda gelmesi
-    /// durumunda miktarları tek satırda toplar.
-    /// </summary>
-    private static List<CreateOrderItemRequest> NormalizeItems(IReadOnlyCollection<CreateOrderItemRequest> requestItems)
+    private static List<CreateOrderItemRequest> ValidateAndMergeItems(IReadOnlyCollection<CreateOrderItemRequest> requestItems)
     {
         if (requestItems.Count == 0)
         {
@@ -153,24 +139,13 @@ public class OrderService
             return PricingType.Standard;
         }
 
-        if (!Enum.TryParse<PricingType>(value, ignoreCase: true, out var parsed))
+        // TryParse tek basina yeterli degil: "7" gibi sayisal degerleri de kabul eder.
+        if (!Enum.TryParse<PricingType>(value, ignoreCase: true, out var parsed) || !Enum.IsDefined(parsed))
         {
-            throw new BusinessRuleException(
-                $"Gecersiz fiyatlandirma tipi: '{value}'. Gecerli degerler: Standard, Bulk.");
+            throw new BusinessRuleException($"Gecersiz fiyatlandirma tipi: '{value}'. Gecerli degerler: Standard, Bulk.");
         }
 
         return parsed;
-    }
-
-    private static void EnsureAllProductsExist(IEnumerable<int> requestedIds, IReadOnlyDictionary<int, Product> found)
-    {
-        var missing = requestedIds.Where(id => !found.ContainsKey(id)).ToList();
-        if (missing.Count > 0)
-        {
-            throw new BusinessRuleException(
-                "Siparisteki bazi urunler bulunamadi.",
-                missing.Select(id => $"{id} numarali urun bulunamadi.").ToList());
-        }
     }
 
     private static OrderDetailResponse ToDetailResponse(Order order) => new(

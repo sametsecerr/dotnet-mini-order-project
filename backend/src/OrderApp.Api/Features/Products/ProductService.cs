@@ -4,11 +4,10 @@ using OrderApp.Api.Data;
 
 namespace OrderApp.Api.Features.Products;
 
-/// <summary>
-/// Ürün okuma işlemleri. Tüm okumalar cache üzerinden (read-through) yapılır.
-/// </summary>
 public class ProductService
 {
+    private const string LikeEscapeCharacter = "\\";
+
     private readonly AppDbContext _db;
     private readonly ProductCache _cache;
 
@@ -18,10 +17,11 @@ public class ProductService
         _cache = cache;
     }
 
-    /// <summary>Ürünleri listeler; <paramref name="search"/> verilirse isim veya stok koduna göre filtreler.</summary>
     public Task<IReadOnlyList<ProductResponse>> GetProductsAsync(string? search, CancellationToken cancellationToken)
     {
-        var term = search?.Trim() ?? string.Empty;
+        // Terim hem cache key'i hem de sorgu icin ayni sekilde normalize edilir;
+        // aksi halde ayni key altinda farkli sonuc kumeleri cache'lenebilir.
+        var term = (search ?? string.Empty).Trim().ToLowerInvariant();
         var cacheKey = term.Length == 0 ? ProductCache.AllProductsKey : ProductCache.SearchKey(term);
 
         return _cache.GetOrCreateAsync(cacheKey, () => QueryProductsAsync(term, cancellationToken));
@@ -46,9 +46,10 @@ public class ProductService
 
         if (term.Length > 0)
         {
-            // SQLite'ta LIKE varsayılan olarak case-insensitive çalışır (ASCII).
-            var pattern = $"%{term}%";
-            query = query.Where(p => EF.Functions.Like(p.Name, pattern) || EF.Functions.Like(p.StockCode, pattern));
+            var pattern = $"%{EscapeLikeWildcards(term)}%";
+            query = query.Where(p =>
+                EF.Functions.Like(p.Name.ToLower(), pattern, LikeEscapeCharacter) ||
+                EF.Functions.Like(p.StockCode.ToLower(), pattern, LikeEscapeCharacter));
         }
 
         return await query
@@ -56,4 +57,9 @@ public class ProductService
             .Select(p => new ProductResponse(p.Id, p.StockCode, p.Name, p.Price, p.StockQuantity))
             .ToListAsync(cancellationToken);
     }
+
+    private static string EscapeLikeWildcards(string term) => term
+        .Replace(LikeEscapeCharacter, LikeEscapeCharacter + LikeEscapeCharacter)
+        .Replace("%", LikeEscapeCharacter + "%")
+        .Replace("_", LikeEscapeCharacter + "_");
 }

@@ -1,11 +1,41 @@
-import type { CreateOrderRequest, OrderDetail, OrderSummary, Product } from './types';
-
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:5116';
 
-/**
- * API'den dönen ProblemDetails / ValidationProblemDetails gövdesini taşıyan hata.
- * `reasons` alanı kullanıcıya satır bazlı gösterilir (ör. hangi üründe stok yok).
- */
+export interface Product {
+  id: number;
+  stockCode: string;
+  name: string;
+  price: number;
+  stockQuantity: number;
+}
+
+export interface OrderItem {
+  productId: number;
+  stockCode: string;
+  productName: string;
+  unitPrice: number;
+  quantity: number;
+  lineTotal: number;
+}
+
+export interface OrderSummary {
+  id: number;
+  customerName: string;
+  pricingType: string;
+  createdAtUtc: string;
+  totalAmount: number;
+  itemCount: number;
+}
+
+export interface OrderDetail extends Omit<OrderSummary, 'itemCount'> {
+  items: OrderItem[];
+}
+
+export interface CreateOrderRequest {
+  customerName: string;
+  pricingType?: string;
+  items: Array<{ productId: number; quantity: number }>;
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly reasons: string[];
@@ -18,11 +48,10 @@ export class ApiError extends Error {
   }
 }
 
-/** catch blogundan gelen `unknown` degeri guvenle Error'a cevirir. */
 export const toError = (error: unknown): Error =>
   error instanceof Error ? error : new Error('Beklenmeyen bir hata olustu.');
 
-interface ProblemDetailsBody {
+interface ProblemDetails {
   title?: string;
   detail?: string;
   reasons?: string[];
@@ -30,19 +59,20 @@ interface ProblemDetailsBody {
 }
 
 async function toApiError(response: Response): Promise<ApiError> {
-  let body: ProblemDetailsBody | null = null;
+  let body: ProblemDetails | null = null;
   try {
-    body = (await response.json()) as ProblemDetailsBody;
+    body = (await response.json()) as ProblemDetails;
   } catch {
-    // Gövde JSON değilse aşağıdaki genel mesaja düşeriz.
+    body = null;
   }
 
-  // Model validation hatalarını da tek bir listeye indirgiyoruz.
   const validationMessages = body?.errors ? Object.values(body.errors).flat() : [];
-  const reasons = body?.reasons ?? validationMessages;
-  const message = body?.detail ?? body?.title ?? `Istek basarisiz oldu (HTTP ${response.status}).`;
 
-  return new ApiError(message, response.status, reasons);
+  return new ApiError(
+    body?.detail ?? body?.title ?? `Istek basarisiz oldu (HTTP ${response.status}).`,
+    response.status,
+    body?.reasons ?? validationMessages,
+  );
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -68,8 +98,6 @@ export const api = {
     const query = search?.trim() ? `?search=${encodeURIComponent(search.trim())}` : '';
     return request<Product[]>(`/api/products${query}`, { signal });
   },
-
-  getProduct: (id: number) => request<Product>(`/api/products/${id}`),
 
   getOrders: () => request<OrderSummary[]>('/api/orders'),
 

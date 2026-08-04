@@ -3,20 +3,12 @@ using OrderApp.Api.Features.Products;
 
 namespace OrderApp.Api.Data;
 
-/// <summary>
-/// Uygulama ilk açıldığında migration'ları uygular ve veritabanı boşsa
-/// örnek ürünleri ekler.
-/// </summary>
 public static class DatabaseSeeder
 {
     public static async Task MigrateAndSeedAsync(AppDbContext db, CancellationToken cancellationToken = default)
     {
         await db.Database.MigrateAsync(cancellationToken);
-        await SeedProductsAsync(db, cancellationToken);
-    }
 
-    public static async Task SeedProductsAsync(AppDbContext db, CancellationToken cancellationToken = default)
-    {
         if (await db.Products.AnyAsync(cancellationToken))
         {
             return;

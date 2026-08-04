@@ -1,9 +1,8 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, toError } from '../api/client';
-import type { OrderSummary } from '../api/types';
-import { EmptyState, ErrorMessage, Loading } from '../components/Feedback';
-import { formatCurrency, formatDateTime } from '../lib/format';
+import { api, toError, type OrderSummary } from '../api';
+import { ErrorMessage } from '../ErrorMessage';
+import { formatCurrency, formatDateTime } from '../format';
 
 export function OrdersPage() {
   const [orders, setOrders] = useState<OrderSummary[]>([]);
@@ -13,31 +12,20 @@ export function OrdersPage() {
   useEffect(() => {
     let isActive = true;
 
-    (async () => {
-      try {
-        const data = await api.getOrders();
-        if (isActive) {
-          setOrders(data);
-        }
-      } catch (err) {
-        if (isActive) {
-          setError(toError(err));
-        }
-      } finally {
-        if (isActive) {
-          setIsLoading(false);
-        }
-      }
-    })();
+    api
+      .getOrders()
+      .then((data) => isActive && setOrders(data))
+      .catch((err) => isActive && setError(toError(err)))
+      .finally(() => isActive && setIsLoading(false));
 
     return () => {
       isActive = false;
     };
   }, []);
 
-  if (isLoading) return <Loading label="Siparisler yukleniyor..." />;
+  if (isLoading) return <p className="state state--loading">Siparisler yukleniyor...</p>;
   if (error) return <ErrorMessage error={error} />;
-  if (orders.length === 0) return <EmptyState label="Henuz siparis olusturulmadi." />;
+  if (orders.length === 0) return <p className="state">Henuz siparis olusturulmadi.</p>;
 
   return (
     <section>

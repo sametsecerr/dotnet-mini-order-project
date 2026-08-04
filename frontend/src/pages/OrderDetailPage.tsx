@@ -1,9 +1,8 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { api, toError } from '../api/client';
-import type { OrderDetail } from '../api/types';
-import { ErrorMessage, Loading } from '../components/Feedback';
-import { formatCurrency, formatDateTime } from '../lib/format';
+import { api, toError, type OrderDetail } from '../api';
+import { ErrorMessage } from '../ErrorMessage';
+import { formatCurrency, formatDateTime } from '../format';
 
 export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -16,29 +15,18 @@ export function OrderDetailPage() {
     setIsLoading(true);
     setError(null);
 
-    (async () => {
-      try {
-        const data = await api.getOrder(Number(id));
-        if (isActive) {
-          setOrder(data);
-        }
-      } catch (err) {
-        if (isActive) {
-          setError(toError(err));
-        }
-      } finally {
-        if (isActive) {
-          setIsLoading(false);
-        }
-      }
-    })();
+    api
+      .getOrder(Number(id))
+      .then((data) => isActive && setOrder(data))
+      .catch((err) => isActive && setError(toError(err)))
+      .finally(() => isActive && setIsLoading(false));
 
     return () => {
       isActive = false;
     };
   }, [id]);
 
-  if (isLoading) return <Loading label="Siparis yukleniyor..." />;
+  if (isLoading) return <p className="state state--loading">Siparis yukleniyor...</p>;
   if (error) return <ErrorMessage error={error} />;
   if (!order) return null;
 
@@ -98,8 +86,8 @@ export function OrderDetailPage() {
       </table>
 
       <p className="hint">
-        Birim fiyatlar siparis anindaki degerlerdir; urun fiyati sonradan degisse bile bu
-        siparisin tutari degismez.
+        Birim fiyatlar siparis anindaki degerlerdir; urun fiyati sonradan degisse bile bu siparisin
+        tutari degismez.
       </p>
     </section>
   );

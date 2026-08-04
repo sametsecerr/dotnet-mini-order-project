@@ -1,13 +1,9 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { api, toError } from '../api/client';
-import type { OrderDetail } from '../api/types';
-import { EmptyState, ErrorMessage, Loading } from '../components/Feedback';
-import { useProducts } from '../hooks/useProducts';
-import { formatCurrency } from '../lib/format';
-
-/** Seçili ürünler: productId -> miktar. Kayıt yoksa ürün seçili değildir. */
-type SelectedItems = Record<number, number>;
+import { api, toError, type OrderDetail, type Product } from '../api';
+import { ErrorMessage } from '../ErrorMessage';
+import { formatCurrency } from '../format';
+import { useProducts } from '../useProducts';
 
 export function NewOrderPage() {
   const [search, setSearch] = useState('');
@@ -15,64 +11,64 @@ export function NewOrderPage() {
 
   const [customerName, setCustomerName] = useState('');
   const [pricingType, setPricingType] = useState('Standard');
-  const [selected, setSelected] = useState<SelectedItems>({});
+  // Secilen urun, arama filtresi onu listeden cikarsa bile sepette kalmali:
+  // bu yuzden miktarla birlikte urunun kendisini de tutuyoruz.
+  const [selected, setSelected] = useState<Record<number, { product: Product; quantity: number }>>({});
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<Error | null>(null);
   const [createdOrder, setCreatedOrder] = useState<OrderDetail | null>(null);
   const [validationMessage, setValidationMessage] = useState<string | null>(null);
 
-  const selectedEntries = useMemo(
-    () => Object.entries(selected).map(([id, quantity]) => ({ productId: Number(id), quantity })),
-    [selected],
-  );
-
-  // Sepet toplamı, seçili ürünlerin güncel fiyatlarıyla önizleme amaçlıdır;
-  // kesin tutarı her zaman sunucu hesaplar.
-  const estimatedTotal = useMemo(
+  // Listede gorunen urun daha guncel; gorunmuyorsa secim anindaki kopyasi kullanilir.
+  const selectedItems = useMemo(
     () =>
-      selectedEntries.reduce((sum, entry) => {
-        const product = products.find((p) => p.id === entry.productId);
-        return product ? sum + product.price * entry.quantity : sum;
-      }, 0),
-    [selectedEntries, products],
+      Object.values(selected).map((item) => ({
+        product: products.find((p) => p.id === item.product.id) ?? item.product,
+        quantity: item.quantity,
+      })),
+    [selected, products],
   );
 
-  const toggleProduct = (productId: number, checked: boolean) => {
+  const estimatedTotal = useMemo(
+    () => selectedItems.reduce((sum, item) => sum + item.product.price * item.quantity, 0),
+    [selectedItems],
+  );
+
+  const toggleProduct = (product: Product, checked: boolean) => {
     setSelected((current) => {
       const next = { ...current };
       if (checked) {
-        next[productId] = 1;
+        next[product.id] = { product, quantity: 1 };
       } else {
-        delete next[productId];
+        delete next[product.id];
       }
       return next;
     });
   };
 
-  const changeQuantity = (productId: number, rawValue: string) => {
+  const changeQuantity = (product: Product, rawValue: string) => {
     const quantity = Number.parseInt(rawValue, 10);
-    setSelected((current) => ({ ...current, [productId]: Number.isNaN(quantity) ? 0 : quantity }));
+    setSelected((current) => ({
+      ...current,
+      [product.id]: { product, quantity: Number.isNaN(quantity) ? 0 : quantity },
+    }));
   };
 
   const validate = (): string | null => {
     if (customerName.trim().length < 2) {
       return 'Musteri adi en az 2 karakter olmalidir.';
     }
-    if (selectedEntries.length === 0) {
+    if (selectedItems.length === 0) {
       return 'Siparis icin en az bir urun secmelisiniz.';
     }
-    if (selectedEntries.some((entry) => entry.quantity <= 0)) {
+    if (selectedItems.some((item) => item.quantity <= 0)) {
       return 'Her secili urun icin miktar sifirdan buyuk olmalidir.';
     }
 
-    const overStock = selectedEntries.find((entry) => {
-      const product = products.find((p) => p.id === entry.productId);
-      return product ? entry.quantity > product.stockQuantity : false;
-    });
+    const overStock = selectedItems.find((item) => item.quantity > item.product.stockQuantity);
     if (overStock) {
-      const product = products.find((p) => p.id === overStock.productId);
-      return `${product?.name} icin mevcut stok ${product?.stockQuantity} adet.`;
+      return `${overStock.product.name} icin mevcut stok ${overStock.product.stockQuantity} adet.`;
     }
 
     return null;
@@ -94,20 +90,17 @@ export function NewOrderPage() {
       const order = await api.createOrder({
         customerName: customerName.trim(),
         pricingType,
-        items: selectedEntries,
+        items: selectedItems.map((item) => ({ productId: item.product.id, quantity: item.quantity })),
       });
 
       setCreatedOrder(order);
       setSelected({});
       setCustomerName('');
-      // Stoklar degisti: listeyi tazele.
-      reloadProducts();
     } catch (err) {
       setSubmitError(toError(err));
-      // Sunucu stok hatasi dondurduyse ekrandaki stok bilgisi eskimis olabilir.
-      reloadProducts();
     } finally {
       setIsSubmitting(false);
+      reloadProducts();
     }
   };
 
@@ -128,8 +121,7 @@ export function NewOrderPage() {
       {createdOrder && (
         <div className="state state--success" role="status">
           <strong>
-            #{createdOrder.id} numarali siparis olusturuldu. Toplam:{' '}
-            {formatCurrency(createdOrder.totalAmount)}
+            #{createdOrder.id} numarali siparis olusturuldu. Toplam: {formatCurrency(createdOrder.totalAmount)}
           </strong>
           <p>
             <Link to={`/orders/${createdOrder.id}`}>Siparis detayini goruntule</Link>
@@ -144,11 +136,7 @@ export function NewOrderPage() {
         </div>
       )}
 
-      {/*
-        noValidate: tarayicinin native constraint validation'i (ornegin miktar > max)
-        submit'i sessizce engelleyip kendi hata mesajlarimizin gosterilmesini
-        onluyordu. Dogrulamayi tek yerde (validate + API) topluyoruz.
-      */}
+      {/* noValidate: tarayicinin kendi validation'i (miktar > max) submit'i sessizce engelliyor. */}
       <form onSubmit={handleSubmit} noValidate>
         <div className="form-row">
           <label>
@@ -172,9 +160,9 @@ export function NewOrderPage() {
         </div>
 
         {productsError && <ErrorMessage error={productsError} />}
-        {isLoading && <Loading />}
+        {isLoading && <p className="state state--loading">Yukleniyor...</p>}
         {!isLoading && !productsError && products.length === 0 && (
-          <EmptyState label="Aramanizla eslesen urun bulunamadi." />
+          <p className="state">Aramanizla eslesen urun bulunamadi.</p>
         )}
 
         {!isLoading && !productsError && products.length > 0 && (
@@ -200,7 +188,7 @@ export function NewOrderPage() {
                         type="checkbox"
                         checked={isSelected}
                         disabled={isOutOfStock}
-                        onChange={(event) => toggleProduct(product.id, event.target.checked)}
+                        onChange={(event) => toggleProduct(product, event.target.checked)}
                         aria-label={`${product.name} sec`}
                       />
                     </td>
@@ -217,9 +205,9 @@ export function NewOrderPage() {
                         className="quantity-input"
                         min={1}
                         max={product.stockQuantity}
-                        value={isSelected ? selected[product.id] : ''}
+                        value={isSelected ? selected[product.id].quantity : ''}
                         disabled={!isSelected}
-                        onChange={(event) => changeQuantity(product.id, event.target.value)}
+                        onChange={(event) => changeQuantity(product, event.target.value)}
                         aria-label={`${product.name} miktar`}
                       />
                     </td>
@@ -232,8 +220,7 @@ export function NewOrderPage() {
 
         <footer className="form-footer">
           <span>
-            {selectedEntries.length} urun secildi &middot; Tahmini toplam:{' '}
-            <strong>{formatCurrency(estimatedTotal)}</strong>
+            {selectedItems.length} urun secildi &middot; Tahmini toplam: <strong>{formatCurrency(estimatedTotal)}</strong>
           </span>
           <button type="submit" disabled={isSubmitting}>
             {isSubmitting ? 'Gonderiliyor...' : 'Siparisi olustur'}

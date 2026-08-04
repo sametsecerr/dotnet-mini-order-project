@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { EmptyState, ErrorMessage, Loading } from '../components/Feedback';
-import { useProducts } from '../hooks/useProducts';
-import { formatCurrency } from '../lib/format';
+import { ErrorMessage } from '../ErrorMessage';
+import { formatCurrency } from '../format';
+import { useProducts } from '../useProducts';
 
 export function ProductsPage() {
   const [search, setSearch] = useState('');
@@ -22,10 +22,10 @@ export function ProductsPage() {
       </header>
 
       {error && <ErrorMessage error={error} />}
-      {isLoading && <Loading />}
+      {isLoading && <p className="state state--loading">Yukleniyor...</p>}
 
       {!isLoading && !error && products.length === 0 && (
-        <EmptyState label="Aramanizla eslesen urun bulunamadi." />
+        <p className="state">Aramanizla eslesen urun bulunamadi.</p>
       )}
 
       {!isLoading && !error && products.length > 0 && (

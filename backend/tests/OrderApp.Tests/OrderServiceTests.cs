@@ -11,10 +11,10 @@ namespace OrderApp.Tests;
 
 public class OrderServiceTests : IDisposable
 {
-    private readonly TestDatabase _database = new();
+    private const int KeyboardId = 1;
+    private const int MouseId = 2;
 
-    private static readonly int KeyboardId = 1;
-    private static readonly int MouseId = 2;
+    private readonly TestDatabase _database = new();
 
     public OrderServiceTests()
     {
@@ -25,17 +25,12 @@ public class OrderServiceTests : IDisposable
         db.SaveChanges();
     }
 
-    private OrderService CreateSut(AppDbContext db) =>
-        new(db, new ProductCache(new MemoryCache(new MemoryCacheOptions()), NullLogger<ProductCache>.Instance),
-            NullLogger<OrderService>.Instance);
-
     [Fact]
-    public async Task CreateOrder_StoklariDusurur_VeToplamiDogruHesaplar()
+    public async Task CreateOrder_ReducesStockAndCalculatesTotal()
     {
         await using var db = _database.CreateContext();
-        var sut = CreateSut(db);
 
-        var order = await sut.CreateOrderAsync(new CreateOrderRequest
+        var order = await CreateSut(db).CreateOrderAsync(new CreateOrderRequest
         {
             CustomerName = "Ahmet Yilmaz",
             Items =
@@ -45,25 +40,22 @@ public class OrderServiceTests : IDisposable
             ]
         }, CancellationToken.None);
 
-        // 2 * 1000.00 + 3 * 250.50 = 2751.50
+        // 2 * 1000.00 + 3 * 250.50
         order.TotalAmount.Should().Be(2751.50m);
         order.Items.Should().HaveCount(2);
 
-        await using var verifyDb = _database.CreateContext();
-        var products = await verifyDb.Products.AsNoTracking().ToDictionaryAsync(p => p.Id);
+        var products = await ReadProductsAsync();
         products[KeyboardId].StockQuantity.Should().Be(8);
         products[MouseId].StockQuantity.Should().Be(0);
     }
 
     [Fact]
-    public async Task CreateOrder_YetersizStokta_SiparisOlusturmaz_VeHicbirStogu_Dusurmez()
+    public async Task CreateOrder_WhenStockIsInsufficient_LeavesOrdersAndStockUntouched()
     {
         await using var db = _database.CreateContext();
-        var sut = CreateSut(db);
 
-        // İlk ürün için stok yeterli, ikinci ürün için yetersiz.
-        // Beklenti: hiçbir stok düşmemeli, sipariş kaydı oluşmamalı.
-        var act = async () => await sut.CreateOrderAsync(new CreateOrderRequest
+        // Ilk urun icin stok yeterli, ikinci urun icin degil.
+        var act = async () => await CreateSut(db).CreateOrderAsync(new CreateOrderRequest
         {
             CustomerName = "Ahmet Yilmaz",
             Items =
@@ -80,26 +72,23 @@ public class OrderServiceTests : IDisposable
         (await verifyDb.Orders.CountAsync()).Should().Be(0);
         (await verifyDb.OrderItems.CountAsync()).Should().Be(0);
 
-        var products = await verifyDb.Products.AsNoTracking().ToDictionaryAsync(p => p.Id);
+        var products = await ReadProductsAsync();
         products[KeyboardId].StockQuantity.Should().Be(10);
         products[MouseId].StockQuantity.Should().Be(3);
     }
 
     [Fact]
-    public async Task CreateOrder_UrunFiyatiSonradanDegisse_Bile_SiparisTutariDegismez()
+    public async Task CreateOrder_KeepsOrderTotal_WhenProductPriceChangesLater()
     {
         await using var db = _database.CreateContext();
-        var sut = CreateSut(db);
-
-        var created = await sut.CreateOrderAsync(new CreateOrderRequest
+        var created = await CreateSut(db).CreateOrderAsync(new CreateOrderRequest
         {
             CustomerName = "Ahmet Yilmaz",
             Items = [new CreateOrderItemRequest { ProductId = KeyboardId, Quantity = 2 }]
         }, CancellationToken.None);
 
         await using var updateDb = _database.CreateContext();
-        var keyboard = await updateDb.Products.SingleAsync(p => p.Id == KeyboardId);
-        keyboard.Price = 5000.00m;
+        (await updateDb.Products.SingleAsync(p => p.Id == KeyboardId)).Price = 5000.00m;
         await updateDb.SaveChangesAsync();
 
         await using var readDb = _database.CreateContext();
@@ -110,12 +99,11 @@ public class OrderServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task CreateOrder_OlmayanUrunIcin_BusinessRuleException_Firlatir()
+    public async Task CreateOrder_WhenProductDoesNotExist_Throws()
     {
         await using var db = _database.CreateContext();
-        var sut = CreateSut(db);
 
-        var act = async () => await sut.CreateOrderAsync(new CreateOrderRequest
+        var act = async () => await CreateSut(db).CreateOrderAsync(new CreateOrderRequest
         {
             CustomerName = "Ahmet Yilmaz",
             Items = [new CreateOrderItemRequest { ProductId = 9999, Quantity = 1 }]
@@ -129,28 +117,25 @@ public class OrderServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task CreateOrder_MiktarSifirVeyaNegatifse_Reddedilir()
+    public async Task CreateOrder_WhenQuantityIsNotPositive_Throws()
     {
         await using var db = _database.CreateContext();
-        var sut = CreateSut(db);
 
-        var act = async () => await sut.CreateOrderAsync(new CreateOrderRequest
+        var act = async () => await CreateSut(db).CreateOrderAsync(new CreateOrderRequest
         {
             CustomerName = "Ahmet Yilmaz",
             Items = [new CreateOrderItemRequest { ProductId = KeyboardId, Quantity = 0 }]
         }, CancellationToken.None);
 
-        await act.Should().ThrowAsync<BusinessRuleException>()
-            .WithMessage("*sifirdan buyuk*");
+        await act.Should().ThrowAsync<BusinessRuleException>().WithMessage("*sifirdan buyuk*");
     }
 
     [Fact]
-    public async Task CreateOrder_AyniUrunBirdenFazlaSatirdaGelirse_MiktarlarBirlestirilir()
+    public async Task CreateOrder_MergesDuplicateLinesForSameProduct()
     {
         await using var db = _database.CreateContext();
-        var sut = CreateSut(db);
 
-        var order = await sut.CreateOrderAsync(new CreateOrderRequest
+        var order = await CreateSut(db).CreateOrderAsync(new CreateOrderRequest
         {
             CustomerName = "Ahmet Yilmaz",
             Items =
@@ -161,9 +146,18 @@ public class OrderServiceTests : IDisposable
         }, CancellationToken.None);
 
         order.Items.Should().ContainSingle().Which.Quantity.Should().Be(3);
+        (await ReadProductsAsync())[MouseId].StockQuantity.Should().Be(0);
+    }
 
-        await using var verifyDb = _database.CreateContext();
-        (await verifyDb.Products.SingleAsync(p => p.Id == MouseId)).StockQuantity.Should().Be(0);
+    private OrderService CreateSut(AppDbContext db) => new(
+        db,
+        new ProductCache(new MemoryCache(new MemoryCacheOptions()), NullLogger<ProductCache>.Instance),
+        NullLogger<OrderService>.Instance);
+
+    private async Task<Dictionary<int, Product>> ReadProductsAsync()
+    {
+        await using var db = _database.CreateContext();
+        return await db.Products.AsNoTracking().ToDictionaryAsync(p => p.Id);
     }
 
     public void Dispose() => _database.Dispose();

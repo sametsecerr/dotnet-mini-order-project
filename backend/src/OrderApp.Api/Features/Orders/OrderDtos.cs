@@ -8,7 +8,6 @@ public class CreateOrderRequest
     [StringLength(200, MinimumLength = 2, ErrorMessage = "Musteri adi 2-200 karakter olmalidir.")]
     public string CustomerName { get; set; } = string.Empty;
 
-    /// <summary>Opsiyonel: "Standard" veya "Bulk". Gönderilmezse Standard kabul edilir.</summary>
     public string? PricingType { get; set; }
 
     [Required(ErrorMessage = "Siparis en az bir urun icermelidir.")]
