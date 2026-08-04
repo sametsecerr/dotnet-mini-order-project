@@ -1,0 +1,21 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+
+# SQLite (uygulama ilk calistiginda migration + seed ile olusur)
+*.db
+*.db-shm
+*.db-wal
+
+# Node / React
+node_modules/
+dist/
+*.local
+
+# Ortam / arac ciktilari
+.vs/
+.vscode/
+.idea/
+.playwright-mcp/
