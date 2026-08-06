@@ -1,35 +1,19 @@
 # Mini Sipariş Uygulaması
 
-Ürün listeleme/arama ve sipariş oluşturma yapan küçük bir web uygulaması.
+.NET 8 Web API + EF Core + SQLite, React + TypeScript, xUnit.
 
-- **Backend:** .NET 8 Web API, Entity Framework Core, SQLite, IMemoryCache
-- **Frontend:** React 19 + TypeScript (Vite), react-router-dom
-- **Test:** xUnit + FluentAssertions (in-memory SQLite üzerinde)
+## Çalıştırma
 
----
-
-## Uygulama nasıl çalıştırılır?
-
-Gereksinimler: .NET 8 SDK, Node.js 18+.
-
-### 1) Backend
+.NET 8 SDK ve Node 18+ yeterli, başka kurulum yok.
 
 ```bash
 cd backend/src/OrderApp.Api
 dotnet run
 ```
 
-- API: `http://localhost:5116`
-- Swagger UI: `http://localhost:5116/swagger`
-
-Uygulama açılışta migration'ları otomatik uygular (`Database.MigrateAsync`) ve veritabanı boşsa
-6 örnek ürün ekler. Ayrıca ayrı bir kurulum adımı gerekmez; SQLite dosyası (`orderapp.db`)
-kendiliğinden oluşur.
-
-> Örnek verilerden biri (`WC-5001` 1080p Webcam) bilerek **0 stokla** eklenir; yetersiz stok
-> senaryosunu elle denemek için kullanılabilir.
-
-### 2) Frontend
+API `http://localhost:5116`, Swagger `/swagger` altında. Migration'lar açılışta
+uygulanıyor, veritabanı boşsa 6 örnek ürün ekleniyor. SQLite dosyası kendiliğinden
+oluşuyor.
 
 ```bash
 cd frontend
@@ -37,270 +21,162 @@ npm install
 npm run dev
 ```
 
-- Uygulama: `http://localhost:5173`
+Uygulama `http://localhost:5173`. API adresini değiştirmek gerekirse `frontend/.env`.
 
-API adresi `frontend/.env` içindeki `VITE_API_BASE_URL` ile ayarlanır (varsayılan `http://localhost:5116`).
-Backend'in CORS ayarı `appsettings.json` → `Cors:AllowedOrigins` içinde `http://localhost:5173`e izin verir.
+Testler için `cd backend && dotnet test`.
 
-### 3) Testler
+## Endpoint'ler
 
-```bash
-cd backend
-dotnet test
 ```
-
-### 4) Migration'ları elle yönetmek (opsiyonel)
-
-```bash
-dotnet tool install --global dotnet-ef
-cd backend
-dotnet ef database update --project src/OrderApp.Api --startup-project src/OrderApp.Api
-```
-
----
-
-## API
-
-| Metot | Endpoint | Açıklama |
-|---|---|---|
-| GET | `/api/products` | Ürünleri listeler |
-| GET | `/api/products?search=klavye` | İsim **veya** stok kodunda arar |
-| GET | `/api/products/{id}` | Ürün detayı |
-| POST | `/api/orders` | Sipariş oluşturur (stokları düşer) |
-| GET | `/api/orders` | Siparişleri listeler (en yeniden eskiye) |
-| GET | `/api/orders/{id}` | Sipariş detayı (satırlarıyla) |
-
-Örnek istek:
-
-```json
+GET  /api/products
+GET  /api/products?search=klavye     isim veya stok kodunda arar
+GET  /api/products/{id}
 POST /api/orders
-{
-  "customerName": "Example Customer",
-  "pricingType": "Bulk",
-  "items": [
-    { "productId": 1, "quantity": 6 },
-    { "productId": 2, "quantity": 4 }
-  ]
-}
+GET  /api/orders
+GET  /api/orders/{id}
 ```
 
-Status kodları: `201` (oluşturuldu), `400` (validation / iş kuralı), `404` (kayıt yok),
-`409` (eşzamanlı stok çakışması), `500` (beklenmeyen).
-
-Hatalar `ProblemDetails` formatında döner. İş kuralı hatalarında satır bazlı sebepler
-`reasons` alanında taşınır ve React tarafında liste olarak gösterilir:
+Hatalar ProblemDetails formatında. Stok yetmediğinde hangi üründe ne kadar eksik
+olduğunu `reasons` alanında satır satır dönüyorum, React tarafı bunu liste olarak
+gösteriyor:
 
 ```json
 {
   "title": "Islem gerceklestirilemedi",
   "status": 400,
   "detail": "Yetersiz stok nedeniyle siparis olusturulamadi.",
-  "instance": "/api/orders",
-  "traceId": "0HNNI3ED6UUB8:00000002",
   "reasons": ["1080p Webcam (WC-5001) icin yeterli stok yok. Talep: 2, mevcut: 0."]
 }
 ```
 
-### `pricingType` hakkında
+201 / 400 / 404 dönüyor, bir de eşzamanlı stok çakışmasında 409.
 
-Case'deki örnek istekte `pricingType` alanı var fakat dokümanda bu alan için bir hesaplama
-kuralı tanımlanmamış. Kendi kuralımı uydurmak yerine alanı **opsiyonel** kabul ettim,
-`Standard`/`Bulk` değerlerine karşı doğruladım ve siparişle birlikte sakladım; fiyatı etkilemiyor.
-Bir indirim kuralı tanımlandığında `OrderService` içinde tek bir noktada uygulanabilir.
+Örnek istekteki `pricingType` için dokümanda bir hesaplama kuralı yok. Kendim bir
+indirim kuralı uydurmak istemedim, alanı opsiyonel yapıp `Standard`/`Bulk` diye
+doğruladım ve siparişle beraber kaydettim. Fiyata dokunmuyor.
 
----
+## Nasıl böldüm
 
-## Problemi hangi parçalara ayırdım?
+Üç parça var: ürün okuma (liste/arama/detay, hiç yazma yok), sipariş yazma (asıl iş
+kuralları burada) ve sipariş okuma (sadece kayıtlı veriyi döner, bir şey hesaplamaz).
+Hata yönetimi ve cache temizleme bunların üstünde ortak duruyor.
 
-1. **Ürün okuma** – listeleme, arama, detay. Yazma yok, bu yüzden tamamen cache'lenebilir.
-2. **Sipariş yazma** – asıl iş kurallarının olduğu yer: doğrulama, stok kontrolü, stok düşümü,
-   fiyat snapshot'ı, transaction.
-3. **Sipariş okuma** – liste ve detay; sadece kayıtlı veriyi okur, yeniden hesaplama yapmaz.
-4. **Çapraz kesen konular** – hata → `ProblemDetails` çevirisi (middleware), cache invalidation,
-   migration + seed.
-5. **Frontend** – üç ekran (ürünler / yeni sipariş / siparişler) + ortak API istemcisi ve
-   loading-error-empty durumlarını gösteren küçük bileşenler.
+## Veritabanı
 
-## Database modelini neden bu şekilde oluşturdum?
+`Products`, `Orders`, `OrderItems`. Klasik master-detail.
 
-Üç tablo: `Products`, `Orders`, `OrderItems` (klasik master-detail).
+`OrderItem` ürünün fiyatını, ismini ve stok kodunu sipariş anında kendi içine
+kopyalıyor. Fiyat değişse bile eski siparişin tutarı değişmemeli dendiği için
+siparişin `Product` tablosuna okuma bağımlılığı olmaması gerekiyordu. `ProductId`
+FK'si duruyor ama tutar hesabında kullanılmıyor. Aynı sebeple `LineTotal` ve
+`TotalAmount` da kaydediliyor, her okumada yeniden hesaplamıyorum.
 
-- **`OrderItem` ürünün kopyasını tutar.** `UnitPrice`, `ProductName`, `ProductStockCode` sipariş
-  anında satıra kopyalanır. En kritik gereksinim "ürün fiyatı değişse bile geçmiş siparişin tutarı
-  değişmemeli" olduğu için sipariş, `Product` tablosuna *okuma bağımlılığı* taşımamalı.
-  `ProductId` FK'si yine duruyor (raporlama/izlenebilirlik için) ama tutar hesabında kullanılmıyor.
-- **`LineTotal` ve `Order.TotalAmount` kaydediliyor (denormalize).** Sipariş tutarı bir kez
-  hesaplanan ve bir daha değişmemesi gereken bir değer; her okumada yeniden hesaplamak hem
-  gereksiz hem de "tarihsel doğruluk" açısından riskli.
-- **Para alanları `decimal(18,2)`** (`HasPrecision(18,2)`). `double`/`float` yuvarlama hatası
-  ürettiği için para değerlerinde kullanılmadı.
-- **`Product.StockCode` unique index**; arama bu index'ten faydalanıyor. `Name` üzerinde de index var.
-- **`Product.Version`** optimistic concurrency token — aşağıdaki veri bütünlüğü bölümünde açıklandı.
-- **Check constraint'ler**: fiyat ve stok negatif olamaz, sipariş miktarı > 0.
-  (Not: SQLite decimal'i TEXT olarak sakladığından fiyat kontrolü `CAST("Price" AS REAL) >= 0`
-  şeklinde yazıldı; düz `"Price" >= 0` yazılırsa metin/sayı karşılaştırması nedeniyle constraint
-  sessizce hep `true` döner.)
-- **`OrderItem` → `Product` ilişkisi `Restrict`**, `Order` → `OrderItem` ilişkisi `Cascade`.
-  Sipariş silinirse satırları da silinir; ürün silinmesi geçmiş siparişi bozamaz.
+Para alanları decimal(18,2). Stok kodunda unique index var, arama da ondan
+faydalanıyor. `Product.Version` optimistic concurrency token, aşağıda anlattım.
+Negatif fiyat/stok ve sıfır miktar için check constraint koydum.
 
-**SQLite tercihi:** case'de serbest bırakılmış ve dosya tabanlı olduğu için değerlendiren kişinin
-hiçbir kurulum yapmadan `dotnet run` diyebilmesini sağlıyor. Transaction ve check constraint
-desteklediği için iş kurallarını gerçekten test edebiliyoruz.
+SQLite seçtim çünkü serbest bırakılmış ve dosya tabanlı olduğu için karşı taraf
+hiçbir şey kurmadan `dotnet run` diyebiliyor. Transaction ve constraint desteklediği
+için testler de gerçek veritabanı üzerinde çalışıyor.
 
-## Kod organizasyonunu neden bu şekilde tercih ettim?
+## Kod organizasyonu
 
-**Feature-based klasörleme + controller/service ayrımı:**
+Feature bazlı: `Features/Products` ve `Features/Orders`, yanlarında `Common` (hata
+tipleri + ProblemDetails middleware) ve `Data`. Bir işi değiştirirken tek klasörde
+kalıyorum, bu boyutta `Models/` `Services/` diye yatay kesmenin faydası yok.
 
-```
-src/OrderApp.Api/
-├── Common/          ExceptionHandlingMiddleware, BusinessRuleException, NotFoundException
-├── Data/            AppDbContext, DatabaseSeeder, Migrations/
-└── Features/
-    ├── Products/    Product, ProductService, ProductCache, ProductsController, ProductResponse
-    └── Orders/      Order, OrderItem, OrderService, OrdersController, OrderDtos
-```
+Controller'lar ince, isteği alıp servisi çağırıyorlar. Stok kontrolü veya try/catch
+controller'da yok.
 
-- Bir işi değiştirirken tek klasörde çalışıyorum; `Models/`, `Services/`, `Repositories/` diye
-  yatay kesmek bu boyutta sadece dosya arasında gezinme maliyeti yaratırdı.
-- **Controller'lar ince**: istek alır, servisi çağırır, HTTP sonucu döner. Hiçbir iş kuralı,
-  `try/catch` veya stok kontrolü controller'da değil.
-- **Gereksiz abstraction yok**: servisler için `IProductService`/`IOrderService` arayüzü ve repository
-  katmanı eklemedim. Tek implementasyon var, `DbContext` zaten Unit of Work + Repository görevi
-  görüyor ve testler gerçek SQLite üzerinde çalıştığı için mock'a ihtiyaç duymuyorum. Servisler yine
-  DI ile (`AddScoped`) kayıtlı; ileride arayüz gerekirse tek satırlık değişiklik.
-- Case CQRS/MediatR/Clean Architecture beklemediğini açıkça belirttiği için bilinçli olarak
-  eklemedim.
-- Tüm I/O metotları `async` ve `CancellationToken` alıyor; token controller'dan servise, oradan
-  EF Core sorgusuna kadar taşınıyor.
+Servislere interface ve repository katmanı eklemedim. Tek implementasyon var,
+DbContext zaten Unit of Work görüyor ve testleri gerçek SQLite üzerinde yazdığım için
+mock'a ihtiyacım olmadı. DI'a yine kayıtlılar.
 
-React tarafı bu boyutta klasörlere bölünmeyi hak etmiyor; `src/` altında düz duruyor:
-`api.ts` (istemci + tipler), `useProducts.ts`, `format.ts`, `ErrorMessage.tsx`,
-`TableSkeleton.tsx` ve `pages/`. Stiller tek bir `index.css` içinde; tipografi Montserrat,
-palet nötr gri tonları — renk sadece hata/başarı gibi anlam taşıyan yerlerde kullanılıyor.
+Frontend'i klasörlere bölmedim, dört ekran için `src/` altında düz duruyor.
 
-## Sipariş ve stok işlemlerinde veri bütünlüğünü nasıl sağladım?
+## Sipariş ve stok
 
-`OrderService.CreateOrderAsync` içinde:
+`OrderService.CreateOrderAsync` içinde her şey tek transaction ve tek SaveChanges.
+Önce bütün satırları kontrol ediyorum, sonra yazıyorum: bir üründe stok yetmezse
+exception fırlıyor, SaveChanges hiç çağrılmadığı için hiçbir stok değişikliği
+veritabanına gitmiyor. Kısmi sipariş oluşmuyor.
 
-1. **Tek transaction** – `BeginTransactionAsync` ile başlar; sipariş kaydı ve tüm stok düşümleri
-   tek `SaveChangesAsync` çağrısında yazılır, sonra `CommitAsync`.
-2. **Önce tüm satırlar kontrol edilir, sonra yazılır** – herhangi bir üründe stok yetmiyorsa
-   `BusinessRuleException` fırlatılır; `SaveChangesAsync` hiç çağrılmadığı için hiçbir stok
-   değişikliği veritabanına gitmez ve transaction commit edilmeden `using` ile rollback olur.
-   Hata mesajı *hangi üründe ne kadar eksik olduğunu* satır satır döner.
-3. **Kısmi sipariş yok** – ürünlerden biri bulunamazsa veya stok yetmezse sipariş hiç oluşmaz.
-4. **Optimistic concurrency** – `Product.Version` bir concurrency token. Stok her düştüğünde
-   `Product.TryReduceStock` içinde artırılır, EF `UPDATE ... WHERE Id=@id AND Version=@version`
-   üretir. İki eşzamanlı istek aynı stoğu okuyup ikisi birden düşemez; kaybeden istek
-   `DbUpdateConcurrencyException` alır, middleware bunu `409 Conflict` + anlaşılır mesaja çevirir.
-   Böylece "iki kullanıcı aynı anda son ürünü sipariş etti" senaryosunda stok eksiye düşmez.
-5. **Domain kuralı entity içinde** – stok düşürme `Product.TryReduceStock(quantity)` metodunda;
-   "yeterli mi?" kontrolü ile "düş" işlemi ayrı yerlere dağılmıyor.
-6. **Aynı ürün birden fazla satırda gelirse** miktarlar tek satırda toplanır (`ValidateAndMergeItems`);
-   aksi halde stok kontrolü satır satır geçip toplamda stoğu aşabilirdi.
+İki kişi aynı anda son ürünü sipariş etmesin diye `Product.Version` concurrency token
+koydum. Stok her düştüğünde artıyor, EF de `UPDATE ... WHERE Id = @id AND Version =
+@version` üretiyor, eşleşmezse 409 dönüyorum.
 
-Ayrıca DB seviyesinde `StockQuantity >= 0` ve `Quantity > 0` check constraint'leri son savunma hattı.
+Pratikte SQLite yazmaları zaten sıraya soktuğu için çoğu durumda sıra bekleyen istek
+taze stoğu okuyup normal "yetersiz stok" hatasına düşüyor. Son 1 adet için 10 paralel
+istek attığımda 1 tanesi 201, 9 tanesi 400 aldı ve stok tam 0'da kaldı. Token burada
+asıl olarak SQL Server/PostgreSQL gibi paralel yazan bir veritabanına geçilirse ya da
+okuma-yazma araya girerse devreye giren emniyet kemeri.
 
-## Cache'i nerede ve neden kullandım?
+Stok düşürme kuralını `Product.TryReduceStock` içine koydum ki "yeterli mi" kontrolü
+ile "düş" işlemi ayrı yerlere dağılmasın. Aynı ürün birden fazla satırda gelirse
+miktarları topluyorum, yoksa satır satır kontrolü geçip toplamda stoğu aşabilirdi.
 
-Cache sadece **ürün okumalarında** kullanılıyor (`ProductService` → `ProductCache` → `IMemoryCache`).
-Ürün listesi sipariş ekranında sürekli okunuyor, buna karşılık ancak sipariş verildiğinde değişiyor —
-yani okuma/yazma oranı yüksek, cache'in en anlamlı olduğu yer burası. Siparişler cache'lenmiyor;
-her istekte değişebilirler ve tutarsız veri göstermenin maliyeti okuma kazancından yüksek.
+## Cache
 
-- **Cache key yapısı**
-  - `products:all` – filtresiz liste
-  - `products:search:{terim}` – aramaya göre liste. Terim tek bir yerde (`ProductService`)
-    trim + küçük harfe normalize edilir ve **aynı normalize edilmiş terim** hem cache key'inde hem
-    de SQL sorgusunda kullanılır; aksi halde aynı key altında farklı sonuç kümeleri cache'lenebilirdi.
-  - `products:id:{id}` – ürün detayı
-- **Cache süresi:** 1 dakika absolute expiration. Stok değiştiğinde zaten anında temizlendiği için
-  TTL'in görevi sadece "bir şekilde kaçırılan" invalidation'lara karşı güvenlik ağı olmak.
-- **Cache'e ne yazılıyor:** entity değil, API'nin döndüğü `ProductResponse` DTO'su. Böylece cache'te
-  EF change tracker'a bağlı nesneler durmuyor ve cache'lenen değer doğrudan response ile aynı.
-- **Bulunamayan kayıt cache'lenmiyor** – aksi halde 404 sonucu TTL boyunca sabitlenirdi.
+Sadece ürün okumalarında. Ürün listesi sipariş ekranında sürekli okunuyor ama ancak
+sipariş verilince değişiyor, cache'in işe yaradığı yer burası. Siparişleri
+cache'lemedim.
 
-## Stok değiştiğinde cache'i nasıl yönettim?
+Key'ler `products:all`, `products:search:{terim}`, `products:id:{id}`. Arama terimini
+tek yerde trim + küçük harf yapıp hem key'de hem sorguda aynısını kullanıyorum; başta
+sadece key'i küçültüyordum, o zaman aynı key altında farklı sonuçlar cache'lenebiliyor.
 
-Bütün ürün cache girdileri ortak bir `CancellationChangeToken` ile işaretleniyor. Sipariş başarıyla
-commit edildikten sonra `OrderService`, `ProductCache.InvalidateAll()` çağırıyor; bu da token'ı iptal
-edip yenisiyle değiştiriyor ve **ürünle ilgili tüm key'ler tek hamlede düşüyor**.
+Süre 1 dakika. Stok değişince zaten anında temizlendiği için TTL sadece atladığım bir
+durum olursa diye duruyor. Cache'e entity değil response DTO'su yazıyorum, bulunamayan
+kaydı da hiç yazmıyorum (yoksa 404 de bir dakika sabitlenir).
 
-Alternatif olarak sadece etkilenen ürünün key'ini silebilirdim; ancak `products:all` ve
-`products:search:*` girdilerinde de o ürünün stoğu görünüyor. "Hangi arama terimleri bu ürünü
-içeriyordu?" sorusunu takip etmek, ürün verisinin nadiren değiştiği bu senaryoda kazancından
-fazla karmaşıklık getirirdi. Invalidation **commit sonrasında** yapılıyor; sipariş başarısız olursa
-cache'e dokunulmuyor.
+Temizleme tarafında bütün ürün girdilerini ortak bir `CancellationChangeToken` ile
+işaretliyorum. Sipariş commit olunca token iptal ediliyor ve ürünle ilgili bütün
+key'ler bir anda düşüyor. Sadece o ürünün key'ini silmek yetmezdi, stoğu `products:all`
+ve arama sonuçlarında da görünüyor; hangi aramaların o ürünü içerdiğini takip etmek de
+bu senaryoda gereksiz karmaşıklık olurdu.
 
-Frontend tarafında da sipariş sonrası ürün listesi yeniden çekiliyor, böylece ekrandaki stok
-bilgisi güncel kalıyor.
+Bir detay: token'ı veriyi okumaya başlamadan önce alıyorum. Sonra alsam sorgu sürerken
+gelen bir temizleme kaybolur ve eski stok bir dakika cache'te kalırdı, bunu yazarken
+gözden kaçırıp sonra fark ettim.
 
 ## Testler
 
-`backend/tests/OrderApp.Tests` – gerçek SQLite (`Data Source=:memory:`) üzerinde, InMemory provider
-yerine, çünkü transaction ve constraint davranışını da doğrulamak istedim. Her test kendi izole
-veritabanını kuruyor.
+`backend/tests/OrderApp.Tests`, gerçek SQLite (`:memory:`) üzerinde. InMemory provider
+transaction'ı gerçekten uygulamadığı için onu kullanmadım. 10 test var, önemlileri:
 
-| Test | Doğruladığı davranış |
-|---|---|
-| `CreateOrder_ReducesStockAndCalculatesTotal` | Stoklar doğru azalır, toplam tutar doğru hesaplanır |
-| `CreateOrder_WhenStockIsInsufficient_LeavesOrdersAndStockUntouched` | Bir üründe stok yetmezse sipariş oluşmaz ve **diğer ürünlerin stoğu da değişmez** |
-| `CreateOrder_KeepsOrderTotal_WhenProductPriceChangesLater` | Fiyat snapshot'ı |
-| `CreateOrder_WhenProductDoesNotExist_Throws` | Ürün varlık kontrolü |
-| `CreateOrder_WhenQuantityIsNotPositive_Throws` | Miktar > 0 kuralı |
-| `CreateOrder_MergesDuplicateLinesForSameProduct` | Satır birleştirme |
-| `GetProducts_SearchesByNameOrStockCode` | İsim/stok kodu araması |
-| `GetProducts_ReturnsFreshStock_AfterOrderInvalidatesCache` | Sipariş sonrası cache invalidation |
+- Yetersiz stokta sipariş oluşmuyor ve diğer ürünlerin stoğu da değişmiyor
+- Sipariş oluşunca stoklar doğru azalıyor, toplam doğru
+- Ürün fiyatı sonradan değişince eski siparişin tutarı değişmiyor
+- Sipariş sonrası cache temizleniyor
 
-## Süre nedeniyle tamamlamadığım / sadeleştirdiğim noktalar
+## Yapmadıklarım
 
-- **Sayfalama yok.** Ürün ve sipariş listeleri tek seferde dönüyor. Gerçek veri hacminde
-  `skip/take` + toplam sayı gerekirdi.
-- **Arama yalnızca ASCII için case-insensitive.** Terim ve kolonlar `lower()` ile karşılaştırılıyor;
-  SQLite'ın `lower()` fonksiyonu Türkçe karakterleri (Ç/ç, İ/ı) katlamıyor. Doğru çözüm collation
-  (PostgreSQL'de `citext`/`ILIKE`) olurdu; SQLite'ta kalmayı tercih ettiğim için bu sınırı kabul ettim.
-- **`DbUpdateException` özel olarak maplenmedi.** Sadece `DbUpdateConcurrencyException` → 409.
-  Check constraint ihlali gibi durumlar zaten bir kod hatasına işaret ettiği için 500 kalması
-  bilinçli; hepsini 409'a çevirmek gerçek hataları maskelerdi.
-- **Concurrency çakışmasında otomatik retry yok.** `409` dönüp kullanıcıdan tekrar denemesini
-  istiyorum; küçük bir retry döngüsü eklenebilirdi ama davranışı görünür tutmayı tercih ettim.
-- **Sipariş iptali / stok iadesi yok** — case kapsamında değil.
-- **Integration test (WebApplicationFactory) yazmadım.** İş kuralları servis seviyesinde test edildi;
-  HTTP katmanı Swagger üzerinden ve tarayıcıdan manuel doğrulandı.
-- **Frontend'de global state yönetimi ve test yok.** Ekranlar birbirinden bağımsız veri çektiği için
-  Redux/React Query gerekmedi; `useProducts` hook'u paylaşılan tek mantık.
-- **Kimlik doğrulama, ürün ekleme/silme yok** — case'de gerekli değil denmişti.
-- **Görsel tasarım** ana kriter olmadığı için sade tutuldu; yine de loading (skeleton),
-  hata, boş durum ve başarı geri bildirimleri ile klavye erişilebilirliği (focus ring,
-  "içeriğe atla" bağlantısı) tamamlandı. Fontlar Google Fonts üzerinden yükleniyor;
-  internet yoksa sistem fontuna düşer.
-- **Docker eklenmedi**; SQLite sayesinde zaten ek altyapı gerekmiyor.
+Sayfalama yok, listeler tek seferde dönüyor. 409 durumunda otomatik retry koymadım,
+kullanıcıya tekrar denemesini söylüyorum. Sipariş iptali/stok iadesi kapsam dışıydı.
+WebApplicationFactory ile integration test yazmadım, iş kurallarını servis seviyesinde
+test edip HTTP tarafını Swagger ve tarayıcıdan manuel doğruladım.
 
-## Hangi AI araçlarını kullandım?
+Arama sadece ASCII'de case-insensitive. Terimi ve kolonları `lower()` ile
+karşılaştırıyorum ama SQLite'ın `lower()`'ı Ç/İ gibi karakterleri katlamıyor. Düzgünü
+collation olurdu (PostgreSQL'de ILIKE), SQLite'ta kalmayı seçtiğim için bu sınırı kabul
+ettim.
 
-Claude Code (Anthropic) kullandım; iskelet kurulumu, tekrar eden CRUD/DTO kodu, CSS ve README
-taslağı için hızlandırıcı olarak. Mimari kararlar (feature-based yapı, snapshot'lı `OrderItem`,
-concurrency token, `CancellationChangeToken` ile toplu invalidation) benim tercihlerim.
+`DbUpdateException`'ı ayrıca maplemedim, sadece concurrency olanı 409'a çeviriyorum.
+Check constraint ihlali zaten benim hatam demektir, 500 dönmesi doğru.
 
-## AI tarafından üretilen kodları nasıl kontrol ettim?
+## AI kullanımı
 
-- **Çalıştırarak doğruladım.** Backend'i ayağa kaldırıp tüm endpoint'leri başarılı ve başarısız
-  senaryolarla denedim (yetersiz stok, olmayan ürün, boş sepet, miktar 0, geçersiz `pricingType`,
-  olmayan sipariş id'si) ve dönen status code + `ProblemDetails` gövdelerini tek tek kontrol ettim.
-- **İş kurallarını testle sabitledim** — özellikle "yetersiz stokta hiçbir stok düşmemeli" ve
-  "fiyat sonradan değişince tutar değişmemeli" senaryolarını.
-- **Frontend'i tarayıcıda uçtan uca denedim**: arama, ürün seçme, miktar girme, sipariş oluşturma,
-  sipariş listesi ve detay ekranı. Bu sırada iki gerçek hata bulup düzelttim:
-  1. Form üzerinde tarayıcının native constraint validation'ı (miktar > `max`) submit'i sessizce
-     engelliyor ve ekranda eski hata mesajı kalıyordu → form `noValidate` yapıldı, doğrulama tek
-     yerde toplandı.
-  2. Ürün fiyatı için yazılan `"Price" >= 0` check constraint'i, SQLite decimal'i TEXT sakladığı
-     için hiçbir zaman ihlal edilemiyordu (metin/sayı karşılaştırması) → `CAST(... AS REAL)` ile
-     düzeltildi.
-- **Üretilen kodu satır satır okudum**; EF sorgularının SQL'e çevrilebilir olduğunu (ör. `Select`
-  içinde statik metot çağrısı yerine constructor projeksiyonu), `async` kullanımının doğru
-  olduğunu ve cache'e null yazılmadığını kontrol ettim.
+Claude Code kullandım. İskelet, tekrar eden DTO/CRUD kodu, CSS ve README taslağı için
+işe yaradı. Mimari kararlar (feature bazlı yapı, OrderItem'da snapshot, concurrency
+token, cache'i tek token'la temizleme) bana ait.
 
-## Çalışmaya yaklaşık ne kadar zaman ayırdım?
+Kontrol için her endpoint'i hem başarılı hem başarısız senaryolarla çağırıp status
+kodunu ve dönen gövdeyi kontrol ettim, iş kurallarını testle sabitledim, frontend'i
+tarayıcıda baştan sona denedim. Bu sırada birkaç şey çıktı: aramada `%` ve `_` escape
+edilmediği için `%` araması bütün katalogu döndürüyordu, `Enum.TryParse` tek başına
+`"7"` gibi değerleri kabul ediyordu, cache token'ını yanlış sırada alıyordum. Yukarıda
+anlattığım cache/arama detaylarının çoğu bu turdan çıktı.
 
-Yaklaşık 4-5 saat: tasarım ve model kararları, backend, frontend, testler ve manuel doğrulama dahil.
+## Süre
+
+Yaklaşık 5 saat.
