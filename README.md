@@ -166,7 +166,7 @@ Check constraint ihlali zaten benim hatam demektir, 500 dönmesi doğru.
 
 ## AI kullanımı
 
-Claude Code kullandım. İskelet, tekrar eden DTO/CRUD kodu, CSS ve README taslağı için
+Claude Code (CLI) kullandım. İskelet, tekrar eden DTO/CRUD kodu, CSS ve README taslağı için
 işe yaradı. Mimari kararlar (feature bazlı yapı, OrderItem'da snapshot, concurrency
 token, cache'i tek token'la temizleme) bana ait.
 
